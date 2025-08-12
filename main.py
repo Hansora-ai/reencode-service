@@ -1,80 +1,60 @@
 import os
-import uuid
-import shutil
+import tempfile
 import requests
 import subprocess
-from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, JSONResponse
+from flask import Flask, request, jsonify, send_file
 
-app = FastAPI()
+app = Flask(__name__)
 
-@app.get("/health")
-def health():
-    return {"ok": True}
-
-def _run_ffmpeg(input_path: str, output_path: str, bitrate_kbps: int, sharpen: bool):
-    vf = []
-    if sharpen:
-        vf.append("unsharp=5:5:0.6:5:5:0.0")
-    vf_arg = ",".join(vf) if vf else "null"
-
-    cmd = [
-        "ffmpeg", "-y",
+def _run_ffmpeg(input_path, output_path, bitrate_kbps):
+    # Force upscale to 1080p and apply sharpening
+    ffmpeg_command = [
+        "ffmpeg",
         "-i", input_path,
-        "-vf", vf_arg,
         "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-profile:v", "high",
-        "-level", "4.1",
+        "-preset", "slow",
         "-b:v", f"{bitrate_kbps}k",
-        "-maxrate", f"{bitrate_kbps}k",
-        "-bufsize", f"{bitrate_kbps*2}k",
-        "-c:a", "copy",
+        "-vf", "scale=1920:1080,unsharp=5:5:0.6:5:5:0.0",
+        "-movflags", "+faststart",
+        "-y",
         output_path
     ]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr[-2000:])
 
-@app.get("/reencode")
-def reencode(
-    background_tasks: BackgroundTasks,
-    video_url: str = Query(..., description="Direct URL to the source MP4/WEBM"),
-    bitrate_kbps: int = Query(2600, ge=300, le=20000, description="Target video bitrate in kbps"),
-    sharpen: bool = Query(True, description="Apply a light unsharp filter"),
-):
-    tmp_dir = "/tmp"
-    in_path = os.path.join(tmp_dir, f"{uuid.uuid4()}.mp4")
-    out_path = os.path.join(tmp_dir, f"{uuid.uuid4()}_out.mp4")
+    subprocess.run(ffmpeg_command, check=True)
 
-    try:
-        # Download source
-        with requests.get(video_url, stream=True, timeout=120) as r:
-            r.raise_for_status()
-            with open(in_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=1024*256):
-                    if chunk:
-                        f.write(chunk)
+@app.route("/reencode", methods=["GET"])
+def reencode_video():
+    video_url = request.args.get("video_url")
+    target_bitrate = request.args.get("target_bitrate", "8000")  # default 8 Mbps
 
-        # Process with ffmpeg
-        _run_ffmpeg(in_path, out_path, bitrate_kbps, sharpen)
+    if not video_url:
+        return jsonify({"error": "Missing video_url parameter"}), 400
 
-        # Schedule cleanup after response is sent
-        def cleanup():
-            for p in (in_path, out_path):
-                try:
-                    if os.path.exists(p):
-                        os.remove(p)
-                except:
-                    pass
-        background_tasks.add_task(cleanup)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = os.path.join(tmpdir, "input.mp4")
+        output_path = os.path.join(tmpdir, "output.mp4")
 
-        return FileResponse(out_path, filename="veo3_sharp.mp4", media_type="video/mp4")
-    except Exception as e:
-        # Try to cleanup input if error
+        # Download video
+        r = requests.get(video_url, stream=True)
+        if r.status_code != 200:
+            return jsonify({"error": "Failed to download video"}), 400
+        with open(input_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        # Run ffmpeg re-encode
         try:
-            if os.path.exists(in_path):
-                os.remove(in_path)
-        except:
-            pass
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+            _run_ffmpeg(input_path, output_path, target_bitrate)
+        except subprocess.CalledProcessError as e:
+            return jsonify({"error": f"ffmpeg failed: {e}"}), 500
+
+        # Return file
+        return send_file(output_path, mimetype="video/mp4")
+
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"status": "ok"})
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
