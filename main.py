@@ -7,10 +7,9 @@ from flask import Flask, request, jsonify, send_file
 app = Flask(__name__)
 
 def _run_ffmpeg(input_path, output_path, bitrate_kbps):
-    # Force upscale to 1080p and apply sharpening
     ffmpeg_command = [
         "ffmpeg",
-        "-y",  # overwrite output file
+        "-y",
         "-i", input_path,
         "-c:v", "libx264",
         "-preset", "slow",
@@ -19,24 +18,22 @@ def _run_ffmpeg(input_path, output_path, bitrate_kbps):
         "-movflags", "+faststart",
         output_path
     ]
-
     proc = subprocess.run(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if proc.returncode != 0:
-        raise RuntimeError(proc.stderr[-2000:])  # last part of ffmpeg log if error
+        raise RuntimeError(f"ffmpeg failed:\n{proc.stderr}")
 
 @app.route("/reencode", methods=["GET"])
 def reencode_video_get():
-    video_url = request.args.get("video_url")
-    target_bitrate = int(request.args.get("target_bitrate", "8000"))  # default 8 Mbps
+    video_url = request.args.get("video_url") or request.args.get("source_url")
+    target_bitrate = int(request.args.get("target_bitrate", "8000"))
 
     if not video_url:
-        return jsonify({"error": "Missing video_url parameter"}), 400
+        return jsonify({"error": "Missing video_url"}), 400
 
     with tempfile.TemporaryDirectory() as tmpdir:
         input_path = os.path.join(tmpdir, "input.mp4")
         output_path = os.path.join(tmpdir, "output.mp4")
 
-        # Download video
         r = requests.get(video_url, stream=True)
         if r.status_code != 200:
             return jsonify({"error": "Failed to download video"}), 400
@@ -44,22 +41,20 @@ def reencode_video_get():
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
 
-        # Check file size
         if os.path.getsize(input_path) < 1000:
             return jsonify({"error": "Downloaded file too small"}), 400
 
-        # Run ffmpeg
         try:
             _run_ffmpeg(input_path, output_path, target_bitrate)
         except Exception as e:
-            return jsonify({"error": f"ffmpeg failed: {e}"}), 500
+            return jsonify({"error": str(e)}), 500
 
         return send_file(output_path, mimetype="video/mp4")
 
 @app.route("/reencode", methods=["POST"])
 def reencode_video_post():
     data = request.get_json(silent=True) or {}
-    video_url = data.get("video_url")
+    video_url = data.get("video_url") or data.get("source_url")
     target_bitrate = int(data.get("target_bitrate", 8000))
 
     if not video_url:
@@ -69,7 +64,6 @@ def reencode_video_post():
         input_path = os.path.join(tmpdir, "input.mp4")
         output_path = os.path.join(tmpdir, "output.mp4")
 
-        # Download video
         r = requests.get(video_url, stream=True)
         if r.status_code != 200:
             return jsonify({"error": "Failed to download video"}), 400
@@ -80,11 +74,10 @@ def reencode_video_post():
         if os.path.getsize(input_path) < 1000:
             return jsonify({"error": "Downloaded file too small"}), 400
 
-        # Run ffmpeg
         try:
             _run_ffmpeg(input_path, output_path, target_bitrate)
         except Exception as e:
-            return jsonify({"error": f"ffmpeg failed: {e}"}), 500
+            return jsonify({"error": str(e)}), 500
 
         return send_file(output_path, mimetype="video/mp4")
 
