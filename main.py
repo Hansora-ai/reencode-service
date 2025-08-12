@@ -20,12 +20,15 @@ def _run_ffmpeg(input_path, output_path, bitrate_kbps):
     ]
     proc = subprocess.run(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg failed:\n{proc.stderr}")
+        raise RuntimeError(f"ffmpeg failed with code {proc.returncode}:\n{proc.stderr}")
 
 @app.route("/reencode", methods=["GET"])
 def reencode_video_get():
     video_url = request.args.get("video_url") or request.args.get("source_url")
-    target_bitrate = int(request.args.get("target_bitrate", "8000"))
+    try:
+        target_bitrate = int(request.args.get("target_bitrate", "8000"))
+    except ValueError:
+        return jsonify({"error": "Invalid target_bitrate"}), 400
 
     if not video_url:
         return jsonify({"error": "Missing video_url"}), 400
@@ -34,9 +37,12 @@ def reencode_video_get():
         input_path = os.path.join(tmpdir, "input.mp4")
         output_path = os.path.join(tmpdir, "output.mp4")
 
-        r = requests.get(video_url, stream=True)
-        if r.status_code != 200:
-            return jsonify({"error": "Failed to download video"}), 400
+        try:
+            r = requests.get(video_url, stream=True)
+            r.raise_for_status()
+        except Exception as e:
+            return jsonify({"error": f"Failed to download video: {e}"}), 400
+
         with open(input_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
@@ -55,7 +61,11 @@ def reencode_video_get():
 def reencode_video_post():
     data = request.get_json(silent=True) or {}
     video_url = data.get("video_url") or data.get("source_url")
-    target_bitrate = int(data.get("target_bitrate", 8000))
+
+    try:
+        target_bitrate = int(data.get("target_bitrate", 8000))
+    except ValueError:
+        return jsonify({"error": "Invalid target_bitrate"}), 400
 
     if not video_url:
         return jsonify({"error": "Missing video_url"}), 400
@@ -64,9 +74,12 @@ def reencode_video_post():
         input_path = os.path.join(tmpdir, "input.mp4")
         output_path = os.path.join(tmpdir, "output.mp4")
 
-        r = requests.get(video_url, stream=True)
-        if r.status_code != 200:
-            return jsonify({"error": "Failed to download video"}), 400
+        try:
+            r = requests.get(video_url, stream=True)
+            r.raise_for_status()
+        except Exception as e:
+            return jsonify({"error": f"Failed to download video: {e}"}), 400
+
         with open(input_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
