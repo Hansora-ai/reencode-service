@@ -15,7 +15,7 @@ def _run_ffmpeg(input_path, output_path, bitrate_kbps):
         "-c:v", "libx264",
         "-preset", "slow",
         "-b:v", f"{bitrate_kbps}k",
-        "-vf", "scale=1920:1080,unsharp=5:5:0.6:5:5:0.0",
+        "-vf", "scale=-2:1080,unsharp=5:5:0.6:5:5:0.0",
         "-movflags", "+faststart",
         output_path
     ]
