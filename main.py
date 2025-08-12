@@ -51,7 +51,7 @@ def reencode_video():
         # Return file
         return send_file(output_path, mimetype="video/mp4")
 
-@app.route("/", methods=["GET"])
+@app.route("/reencode", methods=["POST"])
 def home():
     return jsonify({"status": "ok"})
 
